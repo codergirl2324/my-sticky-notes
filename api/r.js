@@ -26,9 +26,10 @@ export default async function handler(req, res) {
   const qs = params.toString() ? "?" + params.toString() : "";
 
   const upstream = origin + restPath + qs;
+  const upstreamTrailing = origin + restPath + (restPath.endsWith("/") ? "" : "/");
 
   try {
-    const upstreamRes = await fetch(upstream, {
+    let upstreamRes = await fetch(upstream, {
       headers: {
         "User-Agent": req.headers["user-agent"] || "Mozilla/5.0",
         "Accept": req.headers["accept"] || "*/*",
@@ -65,7 +66,6 @@ export default async function handler(req, res) {
 
     const isHTML = ct.includes("text/html");
     const isCSS = ct.includes("text/css");
-    const isJS = ct.includes("javascript");
     const encodedOrigin = segs[0];
 
     if (isHTML) {
@@ -73,6 +73,19 @@ export default async function handler(req, res) {
       body = body.replace(/(src|href|action)=(["'])\//g, `$1=$2/r/${encodedOrigin}/`);
       body = body.replace(/<meta[^>]*content-security-policy[^>]*>/gi, "");
       body = body.replace(/<meta[^>]*http-equiv\s*=\s*["']?X-Frame-Options[^>]*>/gi, "");
+
+      const proxyBase = `/r/${encodedOrigin}${restPath}${restPath.endsWith("/") ? "" : "/"}`;
+      const baseTag = `<base href="${proxyBase}">`;
+      if (body.includes("<head>")) {
+        body = body.replace("<head>", `<head>${baseTag}`);
+      } else if (body.includes("<head ")) {
+        body = body.replace(/<head\s[^>]*>/, `$&${baseTag}`);
+      } else if (body.includes("<HEAD>")) {
+        body = body.replace("<HEAD>", `<HEAD>${baseTag}`);
+      } else {
+        body = baseTag + body;
+      }
+
       res.status(status).send(body);
     } else if (isCSS) {
       let body = await upstreamRes.text();
