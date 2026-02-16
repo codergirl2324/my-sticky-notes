@@ -1,5 +1,89 @@
 export const config = { maxDuration: 30 };
 
+function toProxy(fullUrl) {
+  try {
+    const u = new URL(fullUrl);
+    const enc = Buffer.from(u.origin).toString("base64").replace(/=+$/, "");
+    const p = u.pathname.replace(/\/+$/, "") || "";
+    return `/r/${enc}${p}${u.search}${u.hash}`;
+  } catch {
+    return fullUrl;
+  }
+}
+
+function rewriteHtml(body, encodedOrigin, restPath) {
+  // 1. Rewrite absolute paths (starting with /) to go through proxy with same origin
+  body = body.replace(/(src|href|action|poster)=(["'])\//g, `$1=$2/r/${encodedOrigin}/`);
+
+  // 2. Rewrite full https:// URLs in src/href/action/poster attributes to go through proxy
+  body = body.replace(/(src|href|action|poster)=(["'])(https?:\/\/[^"']+)(["'])/gi, (match, attr, q1, url, q2) => {
+    // Skip data: urls, blob: urls, javascript: urls, and anchors (#)
+    if (url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("javascript:")) return match;
+    // Skip Google Analytics and common tracking scripts that don't need proxying
+    // Actually, proxy everything to mask all external origins
+    return `${attr}=${q1}${toProxy(url)}${q2}`;
+  });
+
+  // 3. Rewrite iframe src assignments in inline scripts
+  body = body.replace(/(\.src\s*=\s*)(["'])(https?:\/\/[^"']+)(["'])/gi, (match, prefix, q1, url, q2) => {
+    return `${prefix}${q1}${toProxy(url)}${q2}`;
+  });
+
+  // 4. Rewrite window.location and document.location assignments
+  body = body.replace(/((?:window|document)\.location(?:\.href)?\s*=\s*)(["'])(https?:\/\/[^"']+)(["'])/gi, (match, prefix, q1, url, q2) => {
+    return `${prefix}${q1}${toProxy(url)}${q2}`;
+  });
+
+  // 5. Remove CSP and X-Frame-Options meta tags
+  body = body.replace(/<meta[^>]*content-security-policy[^>]*>/gi, "");
+  body = body.replace(/<meta[^>]*http-equiv\s*=\s*["']?X-Frame-Options[^>]*>/gi, "");
+
+  // 6. Inject <base> tag for relative path resolution
+  const proxyBase = `/r/${encodedOrigin}${restPath}${restPath.endsWith("/") ? "" : "/"}`;
+  const baseTag = `<base href="${proxyBase}">`;
+  if (body.includes("<head>")) {
+    body = body.replace("<head>", `<head>${baseTag}`);
+  } else if (body.includes("<head ")) {
+    body = body.replace(/<head\s[^>]*>/, `$&${baseTag}`);
+  } else if (body.includes("<HEAD>")) {
+    body = body.replace("<HEAD>", `<HEAD>${baseTag}`);
+  } else {
+    body = baseTag + body;
+  }
+
+  return body;
+}
+
+function rewriteCss(body, encodedOrigin) {
+  // Rewrite absolute paths in url()
+  body = body.replace(/url\(\s*(['"]?)\//g, `url($1/r/${encodedOrigin}/`);
+  // Rewrite full URLs in url()
+  body = body.replace(/url\(\s*(['"]?)(https?:\/\/[^)'"]+)(['"]?)\)/gi, (match, q1, url, q2) => {
+    return `url(${q1}${toProxy(url)}${q2})`;
+  });
+  return body;
+}
+
+function rewriteJs(body, encodedOrigin) {
+  // Rewrite ALL https:// string literals in JS (single/double quotes)
+  body = body.replace(/(["'])(https?:\/\/[^"']+)(["'])/gi, (match, q1, url, q2) => {
+    if (url.startsWith("data:") || url.startsWith("blob:")) return match;
+    return `${q1}${toProxy(url)}${q2}`;
+  });
+  // Rewrite template literal URLs: `https://...`  and `https://...${
+  body = body.replace(/(`)(https?:\/\/[^`$]+)/gi, (match, tick, url) => {
+    try {
+      const u = new URL(url.split("$")[0].split("`")[0]);
+      const enc = Buffer.from(u.origin).toString("base64").replace(/=+$/, "");
+      const p = u.pathname.replace(/\/+$/, "") || "";
+      return `${tick}/r/${enc}${p}${u.search}`;
+    } catch {
+      return match;
+    }
+  });
+  return body;
+}
+
 export default async function handler(req, res) {
   const raw = req.query._p || req.url.replace(/^\/api\/r\/?/, "").replace(/^\/r\/?/, "");
   if (!raw) return res.status(400).send("Bad request");
@@ -26,10 +110,9 @@ export default async function handler(req, res) {
   const qs = params.toString() ? "?" + params.toString() : "";
 
   const upstream = origin + restPath + qs;
-  const upstreamTrailing = origin + restPath + (restPath.endsWith("/") ? "" : "/");
 
   try {
-    let upstreamRes = await fetch(upstream, {
+    const upstreamRes = await fetch(upstream, {
       headers: {
         "User-Agent": req.headers["user-agent"] || "Mozilla/5.0",
         "Accept": req.headers["accept"] || "*/*",
@@ -66,30 +149,20 @@ export default async function handler(req, res) {
 
     const isHTML = ct.includes("text/html");
     const isCSS = ct.includes("text/css");
+    const isJS = ct.includes("javascript") || ct.includes("ecmascript");
     const encodedOrigin = segs[0];
 
     if (isHTML) {
       let body = await upstreamRes.text();
-      body = body.replace(/(src|href|action)=(["'])\//g, `$1=$2/r/${encodedOrigin}/`);
-      body = body.replace(/<meta[^>]*content-security-policy[^>]*>/gi, "");
-      body = body.replace(/<meta[^>]*http-equiv\s*=\s*["']?X-Frame-Options[^>]*>/gi, "");
-
-      const proxyBase = `/r/${encodedOrigin}${restPath}${restPath.endsWith("/") ? "" : "/"}`;
-      const baseTag = `<base href="${proxyBase}">`;
-      if (body.includes("<head>")) {
-        body = body.replace("<head>", `<head>${baseTag}`);
-      } else if (body.includes("<head ")) {
-        body = body.replace(/<head\s[^>]*>/, `$&${baseTag}`);
-      } else if (body.includes("<HEAD>")) {
-        body = body.replace("<HEAD>", `<HEAD>${baseTag}`);
-      } else {
-        body = baseTag + body;
-      }
-
+      body = rewriteHtml(body, encodedOrigin, restPath);
       res.status(status).send(body);
     } else if (isCSS) {
       let body = await upstreamRes.text();
-      body = body.replace(/url\(\s*(['"]?)\//g, `url($1/r/${encodedOrigin}/`);
+      body = rewriteCss(body, encodedOrigin);
+      res.status(status).send(body);
+    } else if (isJS) {
+      let body = await upstreamRes.text();
+      body = rewriteJs(body, encodedOrigin);
       res.status(status).send(body);
     } else {
       const buffer = Buffer.from(await upstreamRes.arrayBuffer());

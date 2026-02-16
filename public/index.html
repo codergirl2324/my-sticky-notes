@@ -887,7 +887,7 @@ function _renderExt(filter = "") {
   }
 
   grid.innerHTML = filtered.map(g => {
-    const img = '<img src="' + g.img + '" alt="" loading="lazy" onerror="this.style.background=\'#1a1a2e\';this.style.display=\'none\'">';
+    const img = '<img src="' + _rw(g.img) + '" alt="" loading="lazy" onerror="this.style.background=\'#1a1a2e\';this.style.display=\'none\'">';
     const name = '<div class="ext-label">' + escapeHtml(g.name) + '</div>';
     return '<div class="ext-card" data-url="' + escapeHtml(g.url) + '" data-name="' + escapeHtml(g.name) + '">' + img + name + '</div>';
   }).join("");
