@@ -38,17 +38,19 @@ function rewriteHtml(body, encodedOrigin, restPath) {
   body = body.replace(/<meta[^>]*content-security-policy[^>]*>/gi, "");
   body = body.replace(/<meta[^>]*http-equiv\s*=\s*["']?X-Frame-Options[^>]*>/gi, "");
 
-  // 6. Inject <base> tag for relative path resolution
+  // 6. Inject <base> tag and security script
   const proxyBase = `/r/${encodedOrigin}${restPath}${restPath.endsWith("/") ? "" : "/"}`;
   const baseTag = `<base href="${proxyBase}">`;
+  const secScript = `<script>window.open=function(){return null};window.__open=function(){return null};</script>`;
+  const inject = baseTag + secScript;
   if (body.includes("<head>")) {
-    body = body.replace("<head>", `<head>${baseTag}`);
+    body = body.replace("<head>", `<head>${inject}`);
   } else if (body.includes("<head ")) {
-    body = body.replace(/<head\s[^>]*>/, `$&${baseTag}`);
+    body = body.replace(/<head\s[^>]*>/, `$&${inject}`);
   } else if (body.includes("<HEAD>")) {
-    body = body.replace("<HEAD>", `<HEAD>${baseTag}`);
+    body = body.replace("<HEAD>", `<HEAD>${inject}`);
   } else {
-    body = baseTag + body;
+    body = inject + body;
   }
 
   return body;
