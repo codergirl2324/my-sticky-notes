@@ -73,7 +73,20 @@ function rewriteHtml(body, encodedOrigin, restPath) {
     : restPath + (restPath.endsWith("/") ? "" : "/");
   const proxyBase = `/r/${encodedOrigin}${basePath}`;
   const baseTag = `<base href="${proxyBase}">`;
-  const secScript = `<script>window.open=function(){return null};window.__open=function(){return null};</script>`;
+  const secScript = `<script>window.open=function(){return null};window.__open=function(){return null};` +
+    // Interceptor: rewrite all dynamic requests to use full-URL encoding
+    `(function(){` +
+    `var K=[83,116,105,99,107,121];` +
+    `function E(s){var b=new TextEncoder().encode(s);var o="";for(var i=0;i<b.length;i++){o+=((b[i]^K[i%K.length]).toString(16)).padStart(2,"0")}return o}` +
+    `function R(u){try{var a=new URL(u,location.href);if(a.origin===location.origin&&a.pathname.startsWith("/r/"))return u;if(a.protocol==="data:"||a.protocol==="blob:"||a.protocol==="javascript:")return u;if(a.origin!==location.origin){return"/r/_/"+E(a.href)}var base=document.querySelector("base");if(base){var bh=base.href;var full=new URL(u,bh);if(full.origin!==location.origin)return"/r/_/"+E(full.href);if(full.pathname.startsWith("/r/")){var p=full.pathname.replace(/^\\/r\\/[^/]+/,"");var oh=full.pathname.match(/^\\/r\\/([^/]+)/);if(oh){try{var bytes=[];var h=oh[1];for(var i=0;i<h.length;i+=2){bytes.push(parseInt(h.substring(i,i+2),16)^K[(i/2)%K.length])}var orig=new TextDecoder().decode(new Uint8Array(bytes));return"/r/_/"+E(orig+p+full.search+full.hash)}catch(e){}}}}return u}catch(e){return u}}` +
+    // Override fetch
+    `var _f=window.fetch;window.fetch=function(a,b){if(typeof a==="string")a=R(a);else if(a&&a.url)a=new Request(R(a.url),a);return _f.call(this,a,b)};` +
+    // Override XMLHttpRequest.open
+    `var _x=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){u=R(u);return _x.apply(this,arguments)};` +
+    // Override element src/href setters for dynamic elements
+    `function W(tag,attr){var d=Object.getOwnPropertyDescriptor(tag.prototype,attr);if(d&&d.set){var os=d.set;Object.defineProperty(tag.prototype,attr,{set:function(v){os.call(this,R(v))},get:d.get})}}` +
+    `try{W(HTMLImageElement,"src");W(HTMLScriptElement,"src");W(HTMLAudioElement,"src");W(HTMLVideoElement,"src");W(HTMLSourceElement,"src");W(HTMLIFrameElement,"src");W(HTMLLinkElement,"href")}catch(e){}` +
+    `})();</script>`;
   const inject = baseTag + secScript;
   if (body.includes("<head>")) {
     body = body.replace("<head>", `<head>${inject}`);
@@ -150,24 +163,39 @@ export default async function handler(req, res) {
   const segs = raw.split("/").filter(Boolean);
   if (segs.length < 1) return res.status(400).send("Bad request");
 
-  let encoded = segs[0];
-
-  let origin;
-  try {
-    origin = _dec(encoded);
-  } catch {
-    return res.status(400).send("Bad request");
-  }
-  if (!origin.startsWith("http")) return res.status(400).send("Bad request");
-
-  const restPath = segs.length > 1 ? "/" + segs.slice(1).join("/") : "/";
-
   const urlObj = new URL(req.url, "http://localhost");
   const params = new URLSearchParams(urlObj.search);
   params.delete("_p");
   const qs = params.toString() ? "?" + params.toString() : "";
 
-  const upstream = origin + restPath + qs;
+  let upstream, origin, encodedOrigin, restPath;
+
+  if (segs[0] === "_" && segs.length >= 2) {
+    // Full-URL mode: /r/_/FULL_ENCODED_HEX
+    try {
+      upstream = _dec(segs[1]);
+    } catch {
+      return res.status(400).send("Bad request");
+    }
+    if (qs) upstream += (upstream.includes("?") ? "&" : "?") + params.toString();
+    const u = new URL(upstream);
+    origin = u.origin;
+    encodedOrigin = _enc(origin);
+    restPath = u.pathname;
+  } else {
+    // Origin+path mode: /r/ENCODED_ORIGIN/path/...
+    encodedOrigin = segs[0];
+    try {
+      origin = _dec(encodedOrigin);
+    } catch {
+      return res.status(400).send("Bad request");
+    }
+    if (!origin.startsWith("http")) return res.status(400).send("Bad request");
+    restPath = segs.length > 1 ? "/" + segs.slice(1).join("/") : "/";
+    upstream = origin + restPath + qs;
+  }
+
+  if (!upstream.startsWith("http")) return res.status(400).send("Bad request");
 
   try {
     const upstreamRes = await fetch(upstream, {
@@ -211,7 +239,6 @@ export default async function handler(req, res) {
     const isHTML = ct.includes("text/html");
     const isCSS = ct.includes("text/css");
     const isJS = ct.includes("javascript") || ct.includes("ecmascript");
-    const encodedOrigin = segs[0];
 
     if (isHTML) {
       let body = await upstreamRes.text();
