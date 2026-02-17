@@ -83,6 +83,8 @@ function rewriteJs(body, encodedOrigin) {
   // Neutralize "to-blocked-page" redirect behavior
   body = body.replace(/"to-blocked-page"\s*===\s*\w+\s*&&\s*this\._redirectToBlocking\([^)]*\)/g, 'false');
   body = body.replace(/this\._redirectToBlocking\([^)]*\)/g, 'void 0');
+  // Neutralize _blockDirectTokenURLEmbedding - always return not blocked
+  body = body.replace(/this\._blockDirectTokenURLEmbedding\(\)\.blocked/g, 'false');
 
   // Rewrite protocol-relative URLs (//domain.com/path) in JS
   body = body.replace(/(["'])(\/\/[a-zA-Z0-9][-a-zA-Z0-9.]*\.[a-zA-Z]{2,}\/[^"']*)(["'])/g, (match, q1, url, q2) => {
