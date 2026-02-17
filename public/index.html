@@ -515,7 +515,7 @@ const _d = [{"name":"10 Min Till Dawn","url":"https://classroom20x.com/mathtest/
 // ===== CONFIG =====
 const _k = [108,101,116,32,109,101,32,99,111,111,107];
 const _p = String.fromCharCode(..._k);
-function _rw(u){try{const o=new URL(u);const e=btoa(o.origin).replace(/=+$/,"");const p=o.pathname.replace(/\/+$/,"")||"";return"/r/"+e+p+o.search+o.hash}catch(x){return u}}
+const _K=[83,116,105,99,107,121];function _rw(u){try{const o=new URL(u);const b=new TextEncoder().encode(o.origin);let e="";for(let i=0;i<b.length;i++){e+=((b[i]^_K[i%_K.length]).toString(16)).padStart(2,"0")}const p=o.pathname.replace(/\/+$/,"")||"";return"/r/"+e+p+o.search+o.hash}catch(x){return u}}
 const NOTE_COLORS = [
   "#fffaad", "#ffd6e0", "#c1f0c1", "#b8e0ff", "#e8ccff",
   "#ffd4a8", "#c8f7dc", "#ffe0f0", "#d4f0ff", "#fff0b8"

@@ -1,9 +1,28 @@
 export const config = { maxDuration: 30 };
 
+const _K = [83, 116, 105, 99, 107, 121];
+
+function _enc(str) {
+  const b = Buffer.from(str);
+  const out = [];
+  for (let i = 0; i < b.length; i++) {
+    out.push((b[i] ^ _K[i % _K.length]).toString(16).padStart(2, "0"));
+  }
+  return out.join("");
+}
+
+function _dec(hex) {
+  const bytes = [];
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes.push(parseInt(hex.substring(i, i + 2), 16) ^ _K[(i / 2) % _K.length]);
+  }
+  return Buffer.from(bytes).toString("utf-8");
+}
+
 function toProxy(fullUrl) {
   try {
     const u = new URL(fullUrl);
-    const enc = Buffer.from(u.origin).toString("base64").replace(/=+$/, "");
+    const enc = _enc(u.origin);
     const p = u.pathname.replace(/\/+$/, "") || "";
     return `/r/${enc}${p}${u.search}${u.hash}`;
   } catch {
@@ -114,7 +133,7 @@ function rewriteJs(body, encodedOrigin) {
   body = body.replace(/(`)(https?:\/\/[^`$]+)/gi, (match, tick, url) => {
     try {
       const u = new URL(url.split("$")[0].split("`")[0]);
-      const enc = Buffer.from(u.origin).toString("base64").replace(/=+$/, "");
+      const enc = _enc(u.origin);
       const p = u.pathname.replace(/\/+$/, "") || "";
       return `${tick}/r/${enc}${p}${u.search}`;
     } catch {
@@ -132,15 +151,14 @@ export default async function handler(req, res) {
   if (segs.length < 1) return res.status(400).send("Bad request");
 
   let encoded = segs[0];
-  const pad = (4 - (encoded.length % 4)) % 4;
-  encoded += "=".repeat(pad);
 
   let origin;
   try {
-    origin = Buffer.from(encoded, "base64").toString("utf-8");
+    origin = _dec(encoded);
   } catch {
     return res.status(400).send("Bad request");
   }
+  if (!origin.startsWith("http")) return res.status(400).send("Bad request");
 
   const restPath = segs.length > 1 ? "/" + segs.slice(1).join("/") : "/";
 
@@ -179,6 +197,9 @@ export default async function handler(req, res) {
       "transfer-encoding", "connection", "keep-alive",
       "cross-origin-resource-policy", "cross-origin-embedder-policy",
       "cross-origin-opener-policy",
+      "report-to", "nel", "server", "cf-ray", "cf-cache-status",
+      "x-served-by", "x-cache", "x-cache-hits", "x-timer",
+      "via", "alt-svc", "server-timing",
     ]);
 
     for (const [key, value] of upstreamRes.headers.entries()) {
